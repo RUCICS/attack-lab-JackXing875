@@ -13,9 +13,6 @@
 先看看这题对应的 *C* 代码：
 
 ```c
-#include <stdio.h>
-#include <stdlib.h>
-
 void func(char *s) {
   char buffer[8];
   strcpy(buffer, s);
