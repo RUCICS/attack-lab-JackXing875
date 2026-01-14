@@ -253,14 +253,121 @@ print(f"Payload (len={len(payload)}) written to ans.txt")
 ![](imgs/p3.png)
 
 ### Problem 4: 
-- **分析**：体现canary的保护机制是什么
-- **解决方案**：payload是什么，即你的python代码or其他能体现你payload信息的代码/图片
-- **结果**：附上图片
+- **分析**：
+
+注意到函数开头部分有
+
+```nasm
+136c:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
+1373:	00 00 
+1375:	48 89 45 f8          	mov    %rax,-0x8(%rbp)
+```
+首先用 *%fs* 段寄存器指向的地址偏移 *0x28* 的位置加载到栈上 *%rbp - 8* 的位置上。在 *Linux* 系统中，*%fs* 通常用于访问线程局部存储，而由于栈随机化的存在，这个地址也是随机的。对应地，在函数结尾部分有：
+
+```nasm
+140a:	48 8b 45 f8          	mov    -0x8(%rbp),%rax
+140e:	64 48 2b 04 25 28 00 	sub    %fs:0x28,%rax
+1415:	00 00 
+1417:	74 05                	je     141e <func+0xc1>
+1419:	e8 b2 fc ff ff       	call   10d0 <__stack_chk_fail@plt>
+141e:	c9                   	leave
+141f:	c3                   	ret
+```
+
+这段代码去除了之前存在栈中的 *canary* 并和原值做了一个比较，如果相同则正常返回，否则调用 `__stack_chk_fail` ，抛出栈异常错误。这一套流程就实现了所谓的 *canary* 保护。
+
+还是先将汇编代码翻译成对应的 *C* 代码：
+
+```c
+void func1(void) {
+    // __readfsqword 是栈保护（canary）
+    puts("great! I will give you great scores");
+}
+
+void func(unsigned int money) {
+    int v2 = money;
+
+    printf("your money is %u\n", money);
+
+    if (money >= 0xFFFFFFFE) {
+        for (unsigned int i = 0; i < 0xFFFFFFFE; i++)
+            v2--;
+
+        if (v2 == 1 && money == -1) {
+            func1();   
+            exit(0);
+        }
+
+        puts("No! I will let you fail!");
+    } else {
+        puts("your money is not enough!");
+    }
+}
+
+int main(int argc, char *argv[]) {
+    unsigned int v3[4];
+    char name_buf[45];   
+    char like_buf[32];
+    char tmp_buf[56];
+
+    v3[1] = -1;
+    v3[2] = -1;
+    v3[3] = -200000096;
+
+    puts("hi please tell me what is your name?");
+
+    scanf("%s", name_buf + 13);
+
+    strcpy(name_buf, "pakagxuwquoe");
+    caesar_decrypt(name_buf, 12);
+
+    puts("hi! do you like ics?");
+
+    scanf("%s", like_buf);
+
+    strcpy(tmp_buf, "urkagsuhqyqkgmzetuuiuxxsuhqkagsaapeoadqe");
+    caesar_decrypt(tmp_buf, 12);
+
+    puts("if you give me enough yuanshi, I will let you pass!");
+
+    while (1) {
+        scanf("%d", &v3[0]);   
+        func(v3[0]);
+    }
+}
+```
+
+可以发现，主函数 `main` 中前段关于 `name_buf` 和 `like_buf` 的输入、`strcpy` 以及凯撒解密操作实际上一点用都没有。整个程序唯一能够输出通关信息 `great! I will give you great scores` 的入口位于 `func1` 函数中，而仅有 `func` 函数调用了 `func1` 。
+
+要使 `func` 成功调用 `func1` ，必须同时满足两个条件：`v2 == 1` 且 `money == -1` 。分析 `func(unsigned int money)` 的代码逻辑可以发现：
+
+- 参数 `money` 类型为 `unsigned int`，而局部变量 `v2` 被初始化为 `money` ，但类型为 `int`。
+
+- `money` 的值直接来源于主函数中最后一次 `scanf("%d", &v3[0])` 的输入。
+
+若我们在最后阶段输入 *-1* ：`scanf` 读入 *-1* ，在内存中补码为 *0xFFFFFFFF* 。对于 `unsigned int money` ，该值被解释为最大无符号整数，满足 `money >= 0xFFFFFFFE` 的分支条件，同时也满足 `money == -1`（无符号比较时常量 *-1* 被转换为 *0xFFFFFFFF* ）的最终检查条件。`v2` 作为 `int` 类型，初始值为 `-1` 。程序进入循环 `for ( unsigned int i = 0; i < 0xFFFFFFFE; i++) v2--;` 。此处循环执行了 *0xFFFFFFFE* 次（即 $2^{32}-2$ 次）自减操作。循环结束后 `v2` 等于 `1` ,且 `money` 依然保持 *-1* ( *0xFFFFFFFF* )。 条件 `if (v2 == 1 && money == -1)` 成立，于是调用 `func1` 并输出正确答案。
+
+综上所述，前面两个阶段输入什么并不重要，只要最后一阶段输入 *-1* 即可通过。
+
+- **解决方案**：本题不需要 `payload` 。
+
+- **结果**：
+
+![](imgs/p4.png)
 
 ## 思考与总结
 
+个人认为这是一个很棒的 `lab` 。这几道题本身并不难，也很有趣味性。这几道题的思路是一脉相承的，但是思维难度逐渐加深，让我很好地巩固了汇编与栈溢出的基础知识，也了解了基础的攻击与防御手段。同时，有些题目 (比如第三题) 显然有不止一种解法，我在选取最优方案的过程中也收获了很多经验与乐趣。但几道题目的难度似乎还是略低 ~~(这似乎是好事啊！)~~，如果能有一些与栈溢出攻击有关的拓展知识加入题目就更好了(比如书上提到的 `nop sled`)。
 
+总而言之，这是一个很棒的 `lab` 。赞美助教！
 
 ## 参考资料
 
-列出在准备报告过程中参考的所有文献、网站或其他资源，确保引用格式正确。
+- [更适合北大宝宝体质的 Attack Lab 踩坑记](https://arthals.ink/blog/attack-lab)
+
+> `PKU` 的 `AttackLab`，最开始的时候阅读这篇博客做了一个简单的入门 (虽然与我们的 `AttackLab` 没有太大关系)
+
+- [栈溢出原理](https://ctf-wiki.org/pwn/linux/user-mode/stackoverflow/x86/stackoverflow-basic/)
+
+> 一些 *ROP* 的基础知识，对于 `Problem3` 有一定帮助
+
