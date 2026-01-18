@@ -211,7 +211,7 @@ Low
 <shellcode+0xa>:   ff d0                   call   *%rax
 ```
 
-于是确定了 `shellcode` 。
+于是确定了 *shellcode* 。
 
 接下来解决栈随机化的问题。发现有一个非常神奇的函数 `jmp_xs`：
 ```nasm
